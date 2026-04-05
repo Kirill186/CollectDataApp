@@ -77,6 +77,14 @@ def copy_python_only_snapshot(src_root: Path, dst_root: Path) -> List[Path]:
         copied.append(rel)
     return copied
 
+    copied: List[Path] = []
+    for py_file in list_python_files(src_root):
+        rel = py_file.relative_to(src_root)
+        target = dst_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(py_file, target)
+        copied.append(rel)
+    return copied
 
 def extract_imports(py_file: Path) -> List[str]:
     content = py_file.read_text(encoding="utf-8", errors="ignore")
@@ -125,33 +133,32 @@ def create_ai_text_placeholders(work_root: Path, ai_root: Path, rel_py_files: Li
         imports = extract_imports(src)
         structure = extract_structure_hints(src)
         rel_txt = rel_py.with_suffix(".txt")
+        target_path = str(rel_py).replace("\\", "/")
         dst = ai_root / rel_txt
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        message = {
-            "target_file_path": str(rel_py).replace("\\", "/"),
-            "important_libraries": imports,
-            "approximate_structure": {
-                "classes": structure["classes"],
-                "functions": structure["functions"],
-                "notes": "Используй похожую архитектурную идею, но не копируй реализацию."
-            },
-            "generation_task": (
-                "Сгенерируй новый AI-вариант этого файла по описанию: "
-                "ориентируйся на библиотеки и примерную структуру, но без дословного повторения кода."
-            ),
-            "expected_output": (
-                "Черновой Python-файл с похожей ролью в проекте, "
-                "с совместимыми импортами и разумной high-level структурой."
-            ),
-            "constraints": [
-                "Не вставляй фрагменты исходного кода один-в-один.",
-                "Не добавляй в .txt содержимое исходного .py файла.",
-                "Соблюдай совместимость по путям/модулям внутри проекта.",
-                "Можно оставлять TODO в деталях бизнес-логики."
-            ],
-        }
-        dst.write_text(json.dumps(message, ensure_ascii=False, indent=2), encoding="utf-8")
+        libraries_text = ", ".join(imports) if imports else "Не указаны (подбери подходящие для роли файла)"
+        classes_text = ", ".join(structure["classes"]) if structure["classes"] else "Нет явных top-level классов"
+        functions_text = ", ".join(structure["functions"]) if structure["functions"] else "Нет явных top-level функций"
+
+        description = (
+            f"Целевой файл: {target_path}\n\n"
+            "Ты участвуешь в генерации датасета для детекции AI-vs-human Python кода.\n"
+            "Нужно подготовить AI-вариант этого файла на основе описания ниже, без копирования исходника.\n\n"
+            f"1) Библиотеки, которые желательно использовать:\n{libraries_text}\n\n"
+            "2) Примерная структура файла:\n"
+            f"- Классы: {classes_text}\n"
+            f"- Функции: {functions_text}\n\n"
+            "3) Что должно получиться:\n"
+            "- Черновой Python-файл с похожей ролью в проекте.\n"
+            "- Совместимые импорты и логичная структура модулей.\n"
+            "- Допускаются TODO в деталях бизнес-логики.\n\n"
+            "4) Ограничения:\n"
+            "- Не вставляй фрагменты исходного кода дословно.\n"
+            "- Восстанови только идею, библиотеки и общий каркас.\n"
+            "- Сохрани совместимость с путями/модулями проекта.\n"
+        )
+        dst.write_text(description, encoding="utf-8")
         created.append(rel_txt)
 
     return created
