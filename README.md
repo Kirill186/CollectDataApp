@@ -1,48 +1,80 @@
 # CollectDataApp
 
-CLI-приложение для ручного пополнения датасета детекции AI/Python-кода.
+CLI-приложение для пополнения датасета детекции AI/Python-кода.
 
 ## Что делает
 
 1. Принимает URL репозитория и commit/tag.
-2. Клонирует репозиторий и делает checkout нужного состояния в `work/<repo_name>`.
-3. Создаёт структуру датасета только в `raw`:
+2. Клонирует репозиторий и делает checkout нужного состояния.
+3. Создаёт структуру датасета:
 
 ```text
 <dataset-root>/
-  raw/
-    human/<repo_name>/
-    ai/<repo_name>/
+  raw/<repo_name>/
+    human/
+    ai/sample_XXX/
+    human_json/
+    ai_json/
+  manifests/dataset.jsonl
   work/<repo_name>/
 ```
 
-4. Копирует в `raw/human/<repo_name>` **только `.py` файлы** с сохранением структуры папок.
-5. Создаёт в `raw/ai/<repo_name>` зеркальную структуру и вместо каждого `.py` файла формирует `.txt`-файл-подсказку.
-6. Генерирует итоговый общий `PROMPT.txt` (и печатает его в stdout), который объясняет ИИ роль в ручной генерации AI-части датасета.
+4. Копирует snapshot проекта в `human/`.
+5. Создаёт JSON-мета-файлы по каждому Python-файлу (`human_json`/`ai_json`).
+6. Создаёт `descriptor.txt` для `human` и `ai`, где хранится только список библиотек и примерная структура Python-файлов (без исходного кода).
+7. Генерирует AI-вариант проекта:
+   - через OpenAI API (`/v1/responses`), передавая только descriptor (без текста исходников), если задан API ключ;
+   - локальным fallback-методом, если ключ не задан (создаются synthetic skeleton-файлы без копирования human-кода).
+8. Добавляет записи в `manifests/dataset.jsonl`.
 
 ## Запуск
 
 ```bash
-python3 collect_data.py <repo_url> <commit> [--dataset-root dataset]
+python3 collect_data.py <repo_url> <commit> [--dataset-root dataset] [--api-key-env CollectData] [--model gpt-4.1-mini]
 ```
 
-Пример:
+По умолчанию, если OpenAI API вернет ошибку (например `429 insufficient_quota`), приложение автоматически переключится на локальную fallback-генерацию и продолжит выполнение. Чтобы принудительно завершать выполнение при ошибке API, добавьте `--fail-on-api-error`.
+
+### Linux / macOS (bash, zsh)
 
 ```bash
+export CollectData="<your_openai_api_key>"
 python3 collect_data.py https://github.com/pallets/flask.git 2.0.0
 ```
 
-## Что внутри `.txt` файлов в `raw/ai/<repo_name>`
+### Windows PowerShell
 
-Каждый `.txt` содержит:
+```powershell
+$env:CollectData = "<your_openai_api_key>"
+python .\collect_data.py https://github.com/pallets/flask.git 2.0.0
+```
 
-- путь целевого Python-файла,
-- найденные импорты/библиотеки,
-- направление задачи для генерации,
-- ожидаемый формат результата,
-- ограничения (без дословного копирования и с сохранением структуры проекта).
+### Windows cmd.exe
+
+```cmd
+set CollectData=<your_openai_api_key>
+python collect_data.py https://github.com/pallets/flask.git 2.0.0
+```
+
+## Формат JSONL
+
+Каждая строка — один Python-файл:
+
+```json
+{
+  "id": "repo_h_0001",
+  "repo": "repo",
+  "label": "human",
+  "file_relpath": "raw/repo/human/app.py",
+  "split": "train",
+  "lang": "python"
+}
+```
+
+Аналогично для `label: "ai"`.
 
 ## Важно
 
-- JSON-метаданные (`human_json`, `ai_json`) и `dataset.jsonl` больше не создаются.
-- Приложение ориентировано на **ручную** генерацию AI-кода на основе `.txt` подсказок.
+- split назначается детерминированно на уровне репозитория (`train/val/test`).
+- Приложение **дописывает** `dataset.jsonl` на каждом запуске.
+- Не храните API-ключи в репозитории; используйте переменные окружения.
