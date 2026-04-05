@@ -77,6 +77,14 @@ def copy_python_only_snapshot(src_root: Path, dst_root: Path) -> List[Path]:
         copied.append(rel)
     return copied
 
+    copied: List[Path] = []
+    for py_file in list_python_files(src_root):
+        rel = py_file.relative_to(src_root)
+        target = dst_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(py_file, target)
+        copied.append(rel)
+    return copied
 
 def extract_imports(py_file: Path) -> List[str]:
     content = py_file.read_text(encoding="utf-8", errors="ignore")
