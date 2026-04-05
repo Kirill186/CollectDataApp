@@ -32,11 +32,27 @@ CLI-приложение для пополнения датасета детек
 python3 collect_data.py <repo_url> <commit> [--dataset-root dataset] [--api-key-env CollectData] [--model gpt-4.1-mini]
 ```
 
-Пример:
+По умолчанию, если OpenAI API вернет ошибку (например `429 insufficient_quota`), приложение автоматически переключится на локальную fallback-генерацию и продолжит выполнение. Чтобы принудительно завершать выполнение при ошибке API, добавьте `--fail-on-api-error`.
+
+### Linux / macOS (bash, zsh)
 
 ```bash
 export CollectData="<your_openai_api_key>"
 python3 collect_data.py https://github.com/pallets/flask.git 2.0.0
+```
+
+### Windows PowerShell
+
+```powershell
+$env:CollectData = "<your_openai_api_key>"
+python .\collect_data.py https://github.com/pallets/flask.git 2.0.0
+```
+
+### Windows cmd.exe
+
+```cmd
+set CollectData=<your_openai_api_key>
+python collect_data.py https://github.com/pallets/flask.git 2.0.0
 ```
 
 ## Формат JSONL

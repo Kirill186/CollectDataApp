@@ -309,6 +309,11 @@ def parse_args() -> argparse.Namespace:
         default="gpt-4.1-mini",
         help="OpenAI model for AI sample generation",
     )
+    parser.add_argument(
+        "--fail-on-api-error",
+        action="store_true",
+        help="Stop execution if OpenAI generation fails instead of using local fallback",
+    )
     return parser.parse_args()
 
 
@@ -336,7 +341,16 @@ def main() -> int:
     api_key = os.getenv(args.api_key_env, "").strip()
     print(f"[4/6] Generating AI sample into {ai_sample_dir}")
     if api_key:
-        generate_ai_project_via_openai(api_key, args.model, repo_name, paths.human_root, ai_sample_dir)
+        try:
+            generate_ai_project_via_openai(api_key, args.model, repo_name, paths.human_root, ai_sample_dir)
+        except RuntimeError as api_error:
+            if args.fail_on_api_error:
+                raise
+            print(
+                f"OpenAI generation failed ({api_error}). Falling back to local synthetic generation.",
+                file=sys.stderr,
+            )
+            local_ai_fallback(paths.human_root, ai_sample_dir)
     else:
         print(
             f"Environment variable '{args.api_key_env}' is empty. Using local fallback generation.",
