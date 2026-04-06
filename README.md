@@ -1,79 +1,63 @@
 # CollectDataApp
 
-CLI-приложение для пополнения датасета детекции AI/Python-кода.
+CLI-приложение для ручного пополнения датасета детекции AI/Python-кода.
 
-## Что делает
+## Что делает `collect_data.py`
 
 1. Принимает URL репозитория и commit/tag.
-2. Клонирует репозиторий и делает checkout нужного состояния.
-3. Создаёт структуру датасета:
+2. Клонирует репозиторий и делает checkout нужного состояния в `work/<repo_name>`.
+3. Создаёт структуру:
 
 ```text
 <dataset-root>/
-  raw/<repo_name>/
-    human/
-    ai/sample_XXX/
-    human_json/
-    ai_json/
-  manifests/dataset.jsonl
+  raw/
+    human/<repo_name>/
+    ai/<repo_name>/
   work/<repo_name>/
 ```
 
-4. Копирует snapshot проекта в `human/`.
-5. Создаёт JSON-мета-файлы по каждому Python-файлу (`human_json`/`ai_json`).
-6. Генерирует AI-вариант проекта:
-   - через OpenAI API (`/v1/responses`), если задан API ключ;
-   - локальным fallback-методом, если ключ не задан.
-7. Добавляет записи в `manifests/dataset.jsonl`.
+4. Копирует **все `.py` файлы в одну папку** `raw/human/<repo_name>` (flattened-формат), даже если в оригинале они были в разных подпапках.
+5. Генерирует в `raw/ai/<repo_name>` `.txt` файлы с **псевдокодом** (не промпты и не исходный код), где есть:
+   - точные импорты,
+   - примерный каркас (классы/функции),
+   - подробное описание что генерировать.
+6. Создаёт:
+   - `PROMPT.txt` (общие правила),
+   - `mapping.json` (соответствие original path -> flattened имя).
 
-## Запуск
+## Файлы-утилиты
+
+### `generate_pseudocode_txt.py`
+Генерирует `.txt`-псевдокоды на основе `mapping.json` и исходников из `work`.
+
+Пример:
 
 ```bash
-python3 collect_data.py <repo_url> <commit> [--dataset-root dataset] [--api-key-env CollectData] [--model gpt-4.1-mini]
+python3 generate_pseudocode_txt.py --work-root dataset/work/my_repo --ai-root dataset/raw/ai/my_repo --mapping-file dataset/raw/ai/my_repo/mapping.json
 ```
 
-По умолчанию, если OpenAI API вернет ошибку (например `429 insufficient_quota`), приложение автоматически переключится на локальную fallback-генерацию и продолжит выполнение. Чтобы принудительно завершать выполнение при ошибке API, добавьте `--fail-on-api-error`.
+### `txt_to_py.py`
+Читает `.txt`-псевдокоды и генерирует по ним `.py` черновики.
 
-### Linux / macOS (bash, zsh)
+Пример:
 
 ```bash
-export CollectData="<your_openai_api_key>"
-python3 collect_data.py https://github.com/pallets/flask.git 2.0.0
+python3 txt_to_py.py --ai-root dataset/raw/ai/my_repo
 ```
 
-### Windows PowerShell
+Если нужно удалить `.txt` после генерации `.py`:
 
-```powershell
-$env:CollectData = "<your_openai_api_key>"
-python .\collect_data.py https://github.com/pallets/flask.git 2.0.0
+```bash
+python3 txt_to_py.py --ai-root dataset/raw/ai/my_repo --replace
 ```
 
-### Windows cmd.exe
+## Основной запуск
 
-```cmd
-set CollectData=<your_openai_api_key>
-python collect_data.py https://github.com/pallets/flask.git 2.0.0
+```bash
+python3 collect_data.py <repo_url> <commit> [--dataset-root dataset]
 ```
-
-## Формат JSONL
-
-Каждая строка — один Python-файл:
-
-```json
-{
-  "id": "repo_h_0001",
-  "repo": "repo",
-  "label": "human",
-  "file_relpath": "raw/repo/human/app.py",
-  "split": "train",
-  "lang": "python"
-}
-```
-
-Аналогично для `label: "ai"`.
 
 ## Важно
 
-- split назначается детерминированно на уровне репозитория (`train/val/test`).
-- Приложение **дописывает** `dataset.jsonl` на каждом запуске.
-- Не храните API-ключи в репозитории; используйте переменные окружения.
+- В `.txt` нет исходника, только псевдокод + точные импорты + структура.
+- JSON-метаданные (`human_json`, `ai_json`) и `dataset.jsonl` не создаются.
