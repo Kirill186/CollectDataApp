@@ -174,6 +174,9 @@ def main() -> int:
         )
     )
 
+    print("\n=== PROMPT FOR AI ===\n")
+    print(prompt)
+
     return 0
 
 
