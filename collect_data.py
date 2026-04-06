@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import shutil
 import subprocess
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List
+
+from generate_pseudocode_txt import FileMapping, generate_pseudocode_files
 
 
 @dataclass
@@ -44,12 +45,7 @@ def ensure_layout(dataset_root: Path, repo_name: str) -> ProjectPaths:
     for p in [human_root, ai_root, work_dir.parent]:
         p.mkdir(parents=True, exist_ok=True)
 
-    return ProjectPaths(
-        dataset_root=dataset_root,
-        human_root=human_root,
-        ai_root=ai_root,
-        work_dir=work_dir,
-    )
+    return ProjectPaths(dataset_root=dataset_root, human_root=human_root, ai_root=ai_root, work_dir=work_dir)
 
 
 def clone_and_checkout(repo_url: str, commit: str, target_dir: Path) -> None:
@@ -63,123 +59,62 @@ def list_python_files(root: Path) -> List[Path]:
     return sorted([p for p in root.rglob("*.py") if p.is_file() and ".git" not in p.parts])
 
 
-def copy_python_only_snapshot(src_root: Path, dst_root: Path) -> List[Path]:
+def flatten_name(rel_path: Path, used_names: Dict[str, int]) -> str:
+    stem = "__".join(rel_path.with_suffix("").parts)
+    candidate = f"{stem}.py"
+    counter = used_names.get(candidate, 0)
+    if counter == 0:
+        used_names[candidate] = 1
+        return candidate
+
+    while True:
+        counter += 1
+        with_suffix = f"{stem}__dup{counter}.py"
+        if with_suffix not in used_names:
+            used_names[candidate] = counter
+            used_names[with_suffix] = 1
+            return with_suffix
+
+
+def copy_python_files_flat(src_root: Path, dst_root: Path) -> List[FileMapping]:
     if dst_root.exists():
         shutil.rmtree(dst_root)
     dst_root.mkdir(parents=True, exist_ok=True)
 
-    copied: List[Path] = []
+    used_names: Dict[str, int] = {}
+    mappings: List[FileMapping] = []
+
     for py_file in list_python_files(src_root):
         rel = py_file.relative_to(src_root)
-        target = dst_root / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
+        flat_name = flatten_name(rel, used_names)
+
+        target = dst_root / flat_name
         shutil.copy2(py_file, target)
-        copied.append(rel)
-    return copied
 
-    copied: List[Path] = []
-    for py_file in list_python_files(src_root):
-        rel = py_file.relative_to(src_root)
-        target = dst_root / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(py_file, target)
-        copied.append(rel)
-    return copied
-
-def extract_imports(py_file: Path) -> List[str]:
-    content = py_file.read_text(encoding="utf-8", errors="ignore")
-    try:
-        tree = ast.parse(content)
-    except SyntaxError:
-        return []
-
-    imports: List[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            imports.append(module)
-    normalized = sorted({item.split(".")[0] for item in imports if item})
-    return normalized[:12]
-
-
-def extract_structure_hints(py_file: Path) -> Dict[str, List[str]]:
-    content = py_file.read_text(encoding="utf-8", errors="ignore")
-    try:
-        tree = ast.parse(content)
-    except SyntaxError:
-        return {"classes": [], "functions": []}
-
-    classes: List[str] = []
-    functions: List[str] = []
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            classes.append(node.name)
-        elif isinstance(node, ast.FunctionDef):
-            functions.append(node.name)
-    return {"classes": classes[:12], "functions": functions[:20]}
-
-
-def create_ai_text_placeholders(work_root: Path, ai_root: Path, rel_py_files: List[Path]) -> List[Path]:
-    if ai_root.exists():
-        shutil.rmtree(ai_root)
-    ai_root.mkdir(parents=True, exist_ok=True)
-
-    created: List[Path] = []
-    for rel_py in rel_py_files:
-        src = work_root / rel_py
-        imports = extract_imports(src)
-        structure = extract_structure_hints(src)
-        rel_txt = rel_py.with_suffix(".txt")
-        target_path = str(rel_py).replace("\\", "/")
-        dst = ai_root / rel_txt
-        dst.parent.mkdir(parents=True, exist_ok=True)
-
-        libraries_text = ", ".join(imports) if imports else "Не указаны (подбери подходящие для роли файла)"
-        classes_text = ", ".join(structure["classes"]) if structure["classes"] else "Нет явных top-level классов"
-        functions_text = ", ".join(structure["functions"]) if structure["functions"] else "Нет явных top-level функций"
-
-        description = (
-            f"Целевой файл: {target_path}\n\n"
-            "Ты участвуешь в генерации датасета для детекции AI-vs-human Python кода.\n"
-            "Нужно подготовить AI-вариант этого файла на основе описания ниже, без копирования исходника.\n\n"
-            f"1) Библиотеки, которые желательно использовать:\n{libraries_text}\n\n"
-            "2) Примерная структура файла:\n"
-            f"- Классы: {classes_text}\n"
-            f"- Функции: {functions_text}\n\n"
-            "3) Что должно получиться:\n"
-            "- Черновой Python-файл с похожей ролью в проекте.\n"
-            "- Совместимые импорты и логичная структура модулей.\n"
-            "- Допускаются TODO в деталях бизнес-логики.\n\n"
-            "4) Ограничения:\n"
-            "- Не вставляй фрагменты исходного кода дословно.\n"
-            "- Восстанови только идею, библиотеки и общий каркас.\n"
-            "- Сохрани совместимость с путями/модулями проекта.\n"
+        mappings.append(
+            FileMapping(
+                source_relpath=str(rel).replace("\\", "/"),
+                human_flat_file=flat_name,
+                ai_txt_file=Path(flat_name).with_suffix(".txt").name,
+            )
         )
-        dst.write_text(description, encoding="utf-8")
-        created.append(rel_txt)
 
-    return created
+    return mappings
 
 
-def build_manual_ai_prompt(repo_name: str, rel_py_files: List[Path]) -> str:
-    structure = [str(p).replace("\\", "/") for p in rel_py_files]
+def build_manual_ai_prompt(repo_name: str, mappings: List[FileMapping]) -> str:
+    flat_files = [m.human_flat_file for m in mappings]
     return (
         "Ты участвуешь в генерации датасета для детекции AI-vs-human Python кода.\n"
         f"Репозиторий: {repo_name}.\n"
-        "Тебе будут даны:\n"
-        "1) структура проекта и назначение проекта;\n"
-        "2) файлы-подсказки .txt вместо .py в raw/ai/<project>.\n\n"
-        "Правила твоей работы:\n"
-        "- Для каждого .txt создай соответствующий .py файл с тем же именем (только расширение .py).\n"
-        "- Используй конкретные библиотеки и примерную структуру, указанные в .txt.\n"
-        "- Генерируй реалистичный, но не дословно скопированный код.\n"
-        "- Код должен примерно соответствовать ожидаемому результату без избыточной конкретики.\n"
-        "- Сохраняй структуру каталогов и модулей проекта.\n\n"
-        "Python-структура исходного проекта:\n"
-        f"{json.dumps(structure, ensure_ascii=False, indent=2)}"
+        "Тебе даны txt-файлы с псевдокодом и точными импортами для каждого python-файла.\n"
+        "Каждый txt соответствует одному целевому .py файлу.\n\n"
+        "Правила:\n"
+        "- Не копируй исходный код дословно.\n"
+        "- Соблюдай импорты и общую структуру из txt.\n"
+        "- Генерируй рабочий черновик в стиле AI, сохраняя роль файла.\n\n"
+        "Список flattened файлов в human:\n"
+        f"{json.dumps(flat_files, ensure_ascii=False, indent=2)}"
     )
 
 
@@ -187,11 +122,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Prepare manual AI/human dataset from repository")
     parser.add_argument("repo_url", help="Git repository URL to clone")
     parser.add_argument("commit", help="Commit hash (or tag/branch) to checkout")
-    parser.add_argument(
-        "--dataset-root",
-        default="dataset",
-        help="Dataset root directory (default: ./dataset)",
-    )
+    parser.add_argument("--dataset-root", default="dataset", help="Dataset root directory (default: ./dataset)")
     return parser.parse_args()
 
 
@@ -205,15 +136,23 @@ def main() -> int:
     print(f"[1/5] Cloning {args.repo_url} into {paths.work_dir}")
     clone_and_checkout(args.repo_url, args.commit, paths.work_dir)
 
-    print("[2/5] Copying only .py files to raw/human")
-    rel_py_files = copy_python_only_snapshot(paths.work_dir, paths.human_root)
+    print("[2/5] Copying all .py into one folder (flattened) for raw/human")
+    mappings = copy_python_files_flat(paths.work_dir, paths.human_root)
 
-    print("[3/5] Creating mirrored .txt placeholders in raw/ai")
-    ai_txt_files = create_ai_text_placeholders(paths.work_dir, paths.ai_root, rel_py_files)
+    print("[3/5] Generating pseudocode txt files in raw/ai")
+    if paths.ai_root.exists():
+        shutil.rmtree(paths.ai_root)
+    paths.ai_root.mkdir(parents=True, exist_ok=True)
+    txt_created = generate_pseudocode_files(paths.work_dir, paths.ai_root, mappings)
 
-    print("[4/5] Building prompt for manual AI generation")
-    prompt = build_manual_ai_prompt(repo_name, rel_py_files)
+    mapping_file = paths.ai_root / "mapping.json"
+    mapping_file.write_text(
+        json.dumps([m.__dict__ for m in mappings], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
+    print("[4/5] Building global prompt")
+    prompt = build_manual_ai_prompt(repo_name, mappings)
     prompt_file = paths.ai_root / "PROMPT.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
 
@@ -222,11 +161,13 @@ def main() -> int:
         json.dumps(
             {
                 "repo": repo_name,
-                "human_py_files": len(rel_py_files),
-                "ai_txt_files": len(ai_txt_files),
+                "human_py_files": len(mappings),
+                "ai_txt_files": txt_created,
                 "human_root": str(paths.human_root),
                 "ai_root": str(paths.ai_root),
                 "prompt_file": str(prompt_file),
+                "mapping_file": str(mapping_file),
+                "next_step": f"python3 txt_to_py.py --ai-root {paths.ai_root}",
             },
             ensure_ascii=False,
             indent=2,
